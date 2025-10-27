@@ -1,8 +1,7 @@
 # Quick Start Guide - Chat Relay System
 
-## Fastest Way to Get Started
 
-### Step 1: Open TWO PowerShell terminals
+### Step 1: Open Two PowerShell terminals
 
 **Terminal 1 - Server:**
 ```powershell
@@ -58,85 +57,3 @@ Type `quit` in either terminal to end the session.
 | `quit` | End chat session |
 | `Ctrl+C` | Force stop server/client |
 
----
-
-## Example Chat Session
-
-**Server Terminal:**
-```
-=== Chat Server Startup ===
-Compiling server.c...
-Compilation successful!
-Starting chat server on port 3490...
-server: waiting for connections...
-server: got connection from ::1
-Chat session started with ::1
-Type messages to send to client (quit to end session):
-
-Hello from server!
-Client: Hi from client!
-How are you?
-Client: I'm good, thanks!
-quit
-Ending chat session
-```
-
-**Client Terminal:**
-```
-=== Chat Client Startup ===
-Compiling client.c...
-Compilation successful!
-Connecting to server at localhost on port 3490...
-client: connected to ::1
-=== Connected to Chat Server ===
-Type your messages and press Enter. Type 'quit' to exit.
-
-Server: Hello from server!
-Hi from client!
-Server: How are you?
-I'm good, thanks!
-Server has ended the chat.
-```
-
----
-
-## Troubleshooting
-
-**Problem:** Scripts won't run  
-**Solution:** Enable script execution:
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-```
-
-**Problem:** WSL not found  
-**Solution:** Install WSL:
-```powershell
-wsl --install
-```
-Then restart your computer.
-
-**Problem:** Connection refused  
-**Solution:** Make sure server is running first!
-
-**Problem:** Port already in use  
-**Solution:** Only one server can run at a time. Close other server instances.
-
-
-## Architecture
-
-```
-┌─────────────────┐         TCP           ┌─────────────────┐
-│     SERVER      │◄─────────────────────►│     CLIENT      │
-│   Port 3490     │    Socket Connection  │                 │
-│                 │                       │                 │
-│  - Listens      │                       │  - Connects     │
-│  - Accepts      │                       │  - Sends/Recv   │
-│  - Forks child  │                       │  - Select I/O   │
-│  - Select I/O   │                       │                 │
-└─────────────────┘                       └─────────────────┘
-```
-
----
-
-
-For detailed documentation, see `README.md`
