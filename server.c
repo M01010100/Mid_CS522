@@ -11,15 +11,33 @@
 #include <netinet/in.h> 
 #include <netdb.h> 
 #include <arpa/inet.h> 
-#include <time.h> 
+#include <time.h>
+#include <openssl/evp.h>
+#include <openssl/aes.h>
+#include <openssl/rand.h>
+#include <openssl/err.h>
 
 #define PORT "3490" // the port users will be connecting to 
 #define BACKLOG 10   // how many pending connections queue will hold 
 #define MAX_CLIENTS 10
 #define MAXDATASIZE 1024
 
-// Encryption key - must match client
-#define ENCRYPTION_KEY "NetworksCS522Key"
+// Remove old XOR key:
+// #define ENCRYPTION_KEY "NetworksCS522Key"
+
+// Add AES-256 key (32 bytes) and IV (16 bytes)
+// These should be securely exchanged in production (e.g., via Diffie-Hellman)
+static const unsigned char AES_KEY[32] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+    0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F
+};
+
+static const unsigned char AES_IV[16] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F
+};
 
 // Client structure
 typedef struct {
@@ -30,14 +48,6 @@ typedef struct {
 
 client_t clients[MAX_CLIENTS];
 int client_count = 0;
-
-// Simple XOR encryption/decryption function
-void xor_encrypt_decrypt(char *data, int length, const char *key) {
-	int key_len = strlen(key);
-	for (int i = 0; i < length; i++) {
-		data[i] ^= key[i % key_len];
-	}
-}
 
 // Get current timestamp as string
 void get_timestamp(char *buffer, size_t size) {
@@ -57,21 +67,28 @@ void *get_in_addr(struct sockaddr *sa)
 
 // Broadcast message to all clients except sender
 void broadcast_message(const char *message, int sender_fd, const char *sender_name) {
-	char buf[MAXDATASIZE];
-	char timestamp[64];
-	get_timestamp(timestamp, sizeof(timestamp));
-	
-	// Format: [timestamp] Username: message
-	snprintf(buf, sizeof(buf), "%s %s: %s", timestamp, sender_name, message);
-	
-	int msg_len = strlen(buf);
-	xor_encrypt_decrypt(buf, msg_len, ENCRYPTION_KEY);
-	
-	for (int i = 0; i < client_count; i++) {
-		if (clients[i].fd != sender_fd && clients[i].fd != -1) {
-			send(clients[i].fd, buf, msg_len, 0);
-		}
-	}
+    char plaintext[MAXDATASIZE];
+    unsigned char ciphertext[MAXDATASIZE + 16]; // Extra space for padding
+    char timestamp[64];
+    get_timestamp(timestamp, sizeof(timestamp));
+    
+    // Format: [timestamp] Username: message
+    int plaintext_len = snprintf(plaintext, sizeof(plaintext), "%s %s: %s", 
+                                  timestamp, sender_name, message);
+    
+    // Encrypt the message
+    int ciphertext_len = aes_encrypt((unsigned char*)plaintext, plaintext_len, ciphertext);
+    if (ciphertext_len < 0) {
+        fprintf(stderr, "Encryption failed\n");
+        return;
+    }
+    
+    // Broadcast to all clients except sender
+    for (int i = 0; i < client_count; i++) {
+        if (clients[i].fd != sender_fd && clients[i].fd != -1) {
+            send(clients[i].fd, ciphertext, ciphertext_len, 0);
+        }
+    }
 }
 
 // Add client to list
@@ -111,6 +128,121 @@ int find_client(int fd) {
 	return -1;
 }
 
+// void xor_encrypt_decrypt(char *data, int length, const char *key) { ... }
+
+// Add AES encryption function
+int aes_encrypt(unsigned char *plaintext, int plaintext_len,
+                unsigned char *ciphertext) {
+    EVP_CIPHER_CTX *ctx;
+    int len;
+    int ciphertext_len;
+
+    // Create and initialize the context
+    if (!(ctx = EVP_CIPHER_CTX_new()))
+        return -1;
+
+    // Initialize encryption operation with AES-256-CBC
+    if (1 != EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, AES_KEY, AES_IV))
+        return -1;
+
+    // Encrypt the plaintext
+    if (1 != EVP_EncryptUpdate(ctx, ciphertext, &len, plaintext, plaintext_len))
+        return -1;
+    ciphertext_len = len;
+
+    // Finalize encryption (handles padding)
+    if (1 != EVP_EncryptFinal_ex(ctx, ciphertext + len, &len))
+        return -1;
+    ciphertext_len += len;
+
+    // Clean up
+    EVP_CIPHER_CTX_free(ctx);
+
+    return ciphertext_len;
+}
+
+// Add AES decryption function
+int aes_decrypt(unsigned char *ciphertext, int ciphertext_len,
+                unsigned char *plaintext) {
+    EVP_CIPHER_CTX *ctx;
+    int len;
+    int plaintext_len;
+
+    // Create and initialize the context
+    if (!(ctx = EVP_CIPHER_CTX_new()))
+        return -1;
+
+    // Initialize decryption operation with AES-256-CBC
+    if (1 != EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, AES_KEY, AES_IV))
+        return -1;
+
+    // Decrypt the ciphertext
+    if (1 != EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len))
+        return -1;
+    plaintext_len = len;
+
+    // Finalize decryption (removes padding)
+    if (1 != EVP_DecryptFinal_ex(ctx, plaintext + len, &len))
+        return -1;
+    plaintext_len += len;
+
+    // Clean up
+    EVP_CIPHER_CTX_free(ctx);
+
+    return plaintext_len;
+}
+
+// Encrypt with random IV and prepend IV to output
+int aes_encrypt_with_random_iv(unsigned char *plaintext, int plaintext_len,
+                                unsigned char *output) {
+    unsigned char iv[16];
+    
+    // Generate random IV
+    if (RAND_bytes(iv, sizeof(iv)) != 1)
+        return -1;
+    
+    // Copy IV to output (first 16 bytes)
+    memcpy(output, iv, 16);
+    
+    // Encrypt with random IV
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, AES_KEY, iv);
+    
+    int len, ciphertext_len;
+    EVP_EncryptUpdate(ctx, output + 16, &len, plaintext, plaintext_len);
+    ciphertext_len = len;
+    
+    EVP_EncryptFinal_ex(ctx, output + 16 + len, &len);
+    ciphertext_len += len;
+    
+    EVP_CIPHER_CTX_free(ctx);
+    
+    return ciphertext_len + 16; // Total: IV + ciphertext
+}
+
+// Decrypt with IV extraction
+int aes_decrypt_with_iv(unsigned char *input, int input_len,
+                         unsigned char *plaintext) {
+    // Extract IV (first 16 bytes)
+    unsigned char iv[16];
+    memcpy(iv, input, 16);
+    
+    // Decrypt (skip first 16 bytes)
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, AES_KEY, iv);
+    
+    int len, plaintext_len;
+    EVP_DecryptUpdate(ctx, plaintext, &len, input + 16, input_len - 16);
+    plaintext_len = len;
+    
+    EVP_DecryptFinal_ex(ctx, plaintext + len, &len);
+    plaintext_len += len;
+    
+    EVP_CIPHER_CTX_free(ctx);
+    
+    return plaintext_len;
+}
+
 int main(void) 
 { 
 	int listener;  // listening socket descriptor
@@ -145,18 +277,18 @@ int main(void)
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_flags = AI_PASSIVE;
-	
+	// Get address info
 	if ((rv = getaddrinfo(NULL, PORT, &hints, &ai)) != 0) {
 		fprintf(stderr, "selectserver: %s\n", gai_strerror(rv));
 		exit(1);
 	}
-	
+	// Bind to the first available address
 	for(p = ai; p != NULL; p = p->ai_next) {
 		listener = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
 		if (listener < 0) { 
 			continue;
 		}
-		
+		// Allow reuse of the address
 		setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
 		
 		if (bind(listener, p->ai_addr, p->ai_addrlen) < 0) {
@@ -166,7 +298,7 @@ int main(void)
 		
 		break;
 	}
-	
+	// Check if bind was successful
 	if (p == NULL) {
 		fprintf(stderr, "selectserver: failed to bind\n");
 		exit(2);
@@ -246,45 +378,58 @@ int main(void)
 					} else {
 						// We got some data from a client
 						buf[nbytes] = '\0';
-						xor_encrypt_decrypt(buf, nbytes, ENCRYPTION_KEY);
+						
+						unsigned char decrypted[MAXDATASIZE];
+						int decrypted_len = aes_decrypt((unsigned char*)buf, nbytes, decrypted);
+						if (decrypted_len < 0) {
+						    fprintf(stderr, "Decryption failed\n");
+						    continue;
+						}
+						decrypted[decrypted_len] = '\0';
 						
 						// If username not set, this is the username
 						if (clients[client_idx].username[0] == '\0') {
-							strncpy(clients[client_idx].username, buf, sizeof(clients[client_idx].username) - 1);
-							clients[client_idx].username[sizeof(clients[client_idx].username) - 1] = '\0';
-							
-							printf("User '%s' joined the chat\n", clients[client_idx].username);
-							
-							// Send acknowledgment
-							char ack[256];
-							snprintf(ack, sizeof(ack), "Welcome, %s! You are now connected. There are %d user(s) online.", 
-								clients[client_idx].username, client_count);
-							int ack_len = strlen(ack);
-							xor_encrypt_decrypt(ack, ack_len, ENCRYPTION_KEY);
-							send(i, ack, ack_len, 0);
-							
-							// Notify other users
-							char join_msg[256];
-							snprintf(join_msg, sizeof(join_msg), "%s has joined the chat\n", clients[client_idx].username);
-							broadcast_message(join_msg, i, "Server");
+						    strncpy(clients[client_idx].username, (char*)decrypted, 
+								    sizeof(clients[client_idx].username) - 1);
+						    clients[client_idx].username[sizeof(clients[client_idx].username) - 1] = '\0';
+						    
+						    printf("User '%s' joined the chat\n", clients[client_idx].username);
+						    
+						    // Send acknowledgment
+						    char ack_plain[256];
+						    unsigned char ack_cipher[256 + 16];
+						    int ack_plain_len = snprintf(ack_plain, sizeof(ack_plain), 
+						        "Welcome, %s! You are now connected. There are %d user(s) online.", 
+						        clients[client_idx].username, client_count);
+						    
+						    int ack_cipher_len = aes_encrypt((unsigned char*)ack_plain, ack_plain_len, ack_cipher);
+						    if (ack_cipher_len > 0) {
+						        send(i, ack_cipher, ack_cipher_len, 0);
+						    }
+						    
+						    // Notify other users
+						    char join_msg[256];
+						    snprintf(join_msg, sizeof(join_msg), "%s has joined the chat\n", 
+						             clients[client_idx].username);
+						    broadcast_message(join_msg, i, "Server");
 						} else {
-							// Regular message - check for quit
-							if (strncmp(buf, "quit", 4) == 0) {
-								printf("%s is leaving the chat\n", clients[client_idx].username);
-								
-								// Notify other users
-								char leave_msg[256];
-								snprintf(leave_msg, sizeof(leave_msg), "%s has left the chat\n", clients[client_idx].username);
-								broadcast_message(leave_msg, i, "Server");
-								
-								close(i);
-								FD_CLR(i, &master);
-								remove_client(client_idx);
-							} else {
-								// Broadcast to all other clients
-								printf("[%s]: %s", clients[client_idx].username, buf);
-								broadcast_message(buf, i, clients[client_idx].username);
-							}
+						    // Regular message - check for quit
+						    if (strncmp((char*)decrypted, "quit", 4) == 0) {
+						        printf("%s is leaving the chat\n", clients[client_idx].username);
+						        
+						        // Notify other users
+						        char leave_msg[256];
+						        snprintf(leave_msg, sizeof(leave_msg), "%s has left the chat\n", clients[client_idx].username);
+						        broadcast_message(leave_msg, i, "Server");
+						        
+						        close(i);
+						        FD_CLR(i, &master);
+						        remove_client(client_idx);
+						    } else {
+						        // Broadcast to all other clients
+						        printf("[%s]: %s", clients[client_idx].username, decrypted);
+						        broadcast_message((char*)decrypted, i, clients[client_idx].username);
+						    }
 						}
 					}
 				}
