@@ -104,14 +104,14 @@ Goodbye!
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    Chat Network                         │
-└──────────────┬──────────────────┬───────────────────────┘
-               │                  │
-        ┌──────▼─────┐    ┌───────▼────┐    ┌──────────┐
+└──────────────┬──────────────────┬───────────────┬───────┘
+               │                  │               |
+        ┌──────▼─────┐    ┌───────▼────┐    ┌─────▼────┐
         │   Client   │    │   Client   │    │  Client  │
         │   (TCP)    │    │   (TCP)    │    │  (TCP)   │
-        └──────┬─────┘    └───────┬────┘    └──────┬───┘
-               │                  │                │
-               └──────────────────┼────────────────┘
+        └──────┬─────┘    └───────┬────┘    └─────┬─-──┘
+               │                  │               │
+               └──────────────────┼───────────────┘
                                   │
                            ┌──────▼──────────┐
                            │  Chat Server    │
@@ -190,22 +190,22 @@ typedef struct {
 **Connection Flow:**
 ```
 Client                              Server
-  │                                   │
-  ├──────── TCP SYN ─────────────────>│
-  │<──────── TCP SYN-ACK ─────────────┤
+  │                                    │
+  ├──────── TCP SYN ─────────────────->│
+  │<──────── TCP SYN-ACK ───────────--─┤
   ├──────── TCP ACK ──────────────────>│
-  │<─ Welcome Message (plaintext) ────┤
+  │<-─ Welcome Message (plaintext) ────┤
   │                                    │
   ├─ Username (XOR encrypted) ────────>│
-  │<─ Welcome ACK (AES encrypted) ────┤
+  │<-─ Welcome ACK (AES encrypted) ────┤
   │                                    │
-  ├─ Messages (AES-256-CBC) ────────→>│(broadcast to all)
-  │<─ Messages (AES-256-CBC) ────────┤
+  ├─ Messages (AES-256-CBC) ────────→> │(broadcast to all)
+  │<─-- Messages (AES-256-CBC) ────────┤
   │         [bidirectional]            │
   │                                    │
   ├─ "quit" message ──────────────────>│
   ├──────── TCP FIN ──────────────────>│
-  └─ TCP FIN-ACK ────────────────────>│
+  └─ TCP FIN-ACK ────────────────────->│
 ```
 
 ### Encryption Details
@@ -247,9 +247,6 @@ Server formats: "[2025-12-13 14:32:10] Alice: Hello everyone!"
 ├── server.c                  # Server implementation
 ├── client.c                  # Client implementation
 ├── talker.c                  # UDP example (educational)
-├── listener                  # Compiled UDP listener (binary)
-├── client                    # Compiled client binary
-├── server                    # Compiled server binary
 ├── QUICKSTART.md            # Quick start guide
 ├── start_server.ps1         # Windows PowerShell server launcher
 ├── start_client.ps1         # Windows PowerShell client launcher
